@@ -11,13 +11,13 @@ st.write("Debug: I can see these keys:", list(st.secrets.keys()))
 # --- INITIAL SETUP ---
 st.set_page_config(page_title="PokeProfit AI", layout="wide", page_icon="📈")
 
-# Load Secrets
-try:
-    RestClient.configure(st.secrets["POKEMON_TCG_API_KEY"])
-    JUST_TCG_KEY = st.secrets["JUST_TCG_API_KEY"]
-except:
-    st.error("Missing API Keys! Add them to Streamlit Secrets.")
-    st.stop()
+# Get secrets directly (if they are missing, Streamlit will show a specific KeyError)
+pokemon_key = st.secrets["POKEMON_TCG_API_KEY"].strip()
+just_tcg_key = st.secrets["JUST_TCG_KEY"].strip()
+
+# Configure the SDK
+# Note: Use the key directly. If this fails, the error will be visible now.
+RestClient.configure(pokemon_key)
 
 # Initialize Collection in Session State
 if 'collection' not in st.session_state:
