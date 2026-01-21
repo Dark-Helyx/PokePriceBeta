@@ -3,6 +3,11 @@ import requests
 import pandas as pd
 from pokemontcgsdk import Card, RestClient
 
+import streamlit as st
+# This will show a list of the NAMES of the keys found (not the actual keys)
+st.write("Debug: I can see these keys:", list(st.secrets.keys()))
+
+
 # --- INITIAL SETUP ---
 st.set_page_config(page_title="PokeProfit AI", layout="wide", page_icon="📈")
 
