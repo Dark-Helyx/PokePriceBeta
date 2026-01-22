@@ -3,76 +3,67 @@ import requests
 import pandas as pd
 from pokemontcgsdk import Card, RestClient
 
-import streamlit as st
-# This will show a list of the NAMES of the keys found (not the actual keys)
-st.write("Debug: I can see these keys:", list(st.secrets.keys()))
-
-
-# --- INITIAL SETUP ---
+# --- 1. INITIAL SETUP ---
 st.set_page_config(page_title="PokeProfit AI", layout="wide", page_icon="📈")
 
-# Get secrets directly (if they are missing, Streamlit will show a specific KeyError)
-pokemon_key = st.secrets["POKEMON_TCG_API_KEY"].strip()
-just_tcg_key = st.secrets["JUST_TCG_KEY"].strip()
+# Clean API Key Loading (Removes potential invisible spaces)
+try:
+    pokemon_key = st.secrets["POKEMON_TCG_API_KEY"].strip()
+    just_tcg_key = st.secrets["JUST_TCG_KEY"].strip()
+    RestClient.configure(pokemon_key)
+except Exception as e:
+    st.error(f"⚠️ Setup Error: {e}")
+    st.stop()
 
-# Configure the SDK
-# Note: Use the key directly. If this fails, the error will be visible now.
-RestClient.configure(pokemon_key)
-
-# Initialize Collection in Session State
+# Initialize Collection
 if 'collection' not in st.session_state:
     st.session_state.collection = []
 
-# --- AI LOGIC FUNCTIONS ---
+# --- 2. THE AI BRAIN ---
 def get_ai_advice(raw_price, psa10_price):
-    if not raw_price or not psa10_price or psa10_price == 0:
-        return "N/A", "⚪", "Insufficient data for AI analysis."
+    if not raw_price or raw_price <= 0:
+        return "NO DATA", "⚪", "Price not available for analysis."
     
-    profit = psa10_price - raw_price - 25  # Subtracting ~$25 for grading fees
-    roi = (profit / raw_price) * 100 if raw_price > 0 else 0
+    # Grading arbitrage logic
+    profit_margin = psa10_price - raw_price - 25  # $25 est. grading fee
+    roi = (profit_margin / raw_price) * 100
     
-    if roi > 120 and raw_price > 30:
-        return "STRONG BUY", "🔥", f"High ROI ({roi:.0f}%). Major gap between Raw and PSA 10."
+    if roi > 120 and raw_price > 20:
+        return "STRONG BUY", "🔥", f"High ROI potential ({roi:.0f}%). Significant gap between Raw and PSA 10."
     elif roi > 40:
-        return "SPECULATIVE", "💎", "Healthy upside. Ensure card condition is Mint before grading."
+        return "SPECULATIVE", "💎", "Healthy margins. Buy if card centering is perfect."
     else:
-        return "HOLD / AVOID", "⚠️", "Low margins. Grading costs may exceed profit."
+        return "HOLD", "📊", "Raw price is too close to graded value. High risk flip."
 
-# --- SIDEBAR: COLLECTION SUMMARY ---
+# --- 3. SIDEBAR PORTFOLIO ---
 st.sidebar.header("💼 My Portfolio")
 if st.session_state.collection:
     df_col = pd.DataFrame(st.session_state.collection)
-    total_invested = df_col["Buy Price"].sum()
-    # In a production app, you'd re-fetch prices here to show 'Current Value'
-    st.sidebar.metric("Total Investment", f"${total_invested:,.2f}")
-    if st.sidebar.button("Clear Collection"):
+    total_val = df_col["Buy Price"].sum()
+    st.sidebar.metric("Total Investment", f"${total_val:,.2f}")
+    if st.sidebar.button("Clear All"):
         st.session_state.collection = []
         st.rerun()
-else:
-    st.sidebar.info("Collection is empty.")
 
-# --- MAIN UI ---
-st.title("🚀 PokeProfit AI: Search & Portfolio Advisor")
-query = st.text_input("Enter Pokémon Name (e.g. Gengar):", placeholder="Charizard...")
+# --- 4. MAIN INTERFACE ---
+st.title("🚀 PokePrice AI: Search & Portfolio Advisor")
+query = st.text_input("Enter Pokémon Name:", placeholder="e.g. Rayquaza...")
 
 if query:
-    # 1. Fetch ALL matching cards
-    with st.spinner('Searching entire database...'):
-        all_cards = Card.where(q=f'name:"{query}*"') # Using wildcard for better results
+    with st.spinner('Scanning the Pokédex...'):
+        all_cards = Card.where(q=f'name:"{query}*"')
 
     if all_cards:
         # PAGINATION
         CARDS_PER_PAGE = 10
         total_found = len(all_cards)
-        num_pages = (total_found // CARDS_PER_PAGE) + (1 if total_found % CARDS_PER_PAGE > 0 else 0)
-        
-        st.write(f"Showing {total_found} results matching '{query}'")
+        num_pages = max(1, (total_found // CARDS_PER_PAGE) + (1 if total_found % CARDS_PER_PAGE > 0 else 0))
         page = st.select_slider("Select Page", options=range(1, num_pages + 1))
         
         start_idx = (page - 1) * CARDS_PER_PAGE
-        end_idx = start_idx + CARDS_PER_PAGE
-        
-        for card in all_cards[start_idx:end_idx]:
+        cards_to_show = all_cards[start_idx : start_idx + CARDS_PER_PAGE]
+
+        for card in cards_to_show:
             with st.container(border=True):
                 col1, col2, col3 = st.columns([1, 2, 1.5])
                 
@@ -81,40 +72,45 @@ if query:
                 
                 with col2:
                     st.subheader(f"{card.name} ({card.set.name})")
-                    st.write(f"**Number:** {card.number}/{card.set.printedTotal} | **Rarity:** {card.rarity}")
+                    st.write(f"**ID:** `{card.id}` | **Rarity:** {getattr(card, 'rarity', 'Common')}")
                     
-                    # Fetch JustTCG Pricing
-                    tcg_id = card.tcgplayer.id if card.tcgplayer else None
+                    # COUNTERMEASURE: Safe TCGplayer ID Fetch
                     raw_price = 0.0
-                    if tcg_id:
-                        jt_url = f"https://api.justtcg.com/v1/cards?tcgplayerId={tcg_id}"
-                        jt_res = requests.get(jt_url, headers={"x-api-key": JUST_TCG_KEY}).json()
-                        if "data" in jt_res and jt_res["data"]:
-                            variants = jt_res["data"][0].get("variants", [])
-                            # Find Near Mint price as the 'Raw' baseline
-                            for v in variants:
-                                if "Near Mint" in v['condition']:
-                                    raw_price = v['price']
-                                    st.metric("Raw (NM) Price", f"${raw_price:,.2f}")
-                                    break
+                    tcg_info = getattr(card, 'tcgplayer', None)
                     
-                    if st.button(f"➕ Add to Collection", key=f"add_{card.id}"):
+                    if tcg_info:
+                        try:
+                            # Use the JustTCG API to get market variants
+                            tcg_id = tcg_info.id
+                            jt_url = f"https://api.justtcg.com/v1/cards?tcgplayerId={tcg_id}"
+                            jt_res = requests.get(jt_url, headers={"x-api-key": just_tcg_key}, timeout=5).json()
+                            
+                            if "data" in jt_res and jt_res["data"]:
+                                variants = jt_res["data"][0].get("variants", [])
+                                # Auto-pick the first available price as the 'Raw' baseline
+                                if variants:
+                                    raw_price = variants[0]['price']
+                                    st.metric("Market Price (Raw)", f"${raw_price:,.2f}")
+                        except:
+                            st.write("⚠️ Price lookup failed.")
+
+                    if st.button(f"Add to Portfolio", key=f"btn_{card.id}"):
                         st.session_state.collection.append({
-                            "Name": card.name, "Set": card.set.name, "Buy Price": raw_price, "ID": card.id
+                            "Name": card.name, "Set": card.set.name, "Buy Price": raw_price
                         })
-                        st.toast("Added to portfolio!")
+                        st.toast(f"Saved {card.name}!")
 
                 with col3:
-                    st.markdown("### 🤖 AI Investment Advice")
-                    # Using a placeholder for PSA 10 (In reality, you'd scrape PriceCharting here)
-                    # For demo: Estimating PSA 10 as roughly 3.5x Raw price or $50 minimum
-                    est_psa10 = raw_price * 3.5 if raw_price > 5 else 50.0
+                    st.markdown("### 🤖 AI Prediction")
+                    # Estimated PSA 10 value (Aggressive multiplier for vintage, conservative for modern)
+                    est_psa10 = raw_price * 4 if raw_price > 10 else raw_price + 40
                     
                     status, icon, reason = get_ai_advice(raw_price, est_psa10)
                     st.info(f"{icon} **{status}**\n\n{reason}")
                     
-                    pc_url = f"https://www.pricecharting.com/search-products?q={card.name}+{card.set.name}+{card.number}".replace(" ", "+")
-                    st.link_button("Verify Graded Sold History 📈", pc_url)
+                    # Helpful Links
+                    pc_q = f"{card.name} {card.set.name} {card.number}".replace(" ", "+")
+                    st.link_button("View Graded Sold History 📈", f"https://www.pricecharting.com/search-products?q={pc_q}")
 
     else:
-        st.error("No cards found. Try a different name.")
+        st.warning("No cards found for that name.")
